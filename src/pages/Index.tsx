@@ -14,17 +14,26 @@ import {
   Utensils,
   Shirt,
   Zap,
-  Compass
+  Compass,
+  LogIn,
+  LogOut,
+  User
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/components/AuthProvider";
 
 const Index = () => {
   const navigate = useNavigate();
+  const { user, loading, signOut } = useAuth();
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     setIsLoaded(true);
   }, []);
+
+  const handleSignOut = async () => {
+    await signOut();
+  };
 
   const features = [
     {
@@ -52,8 +61,48 @@ const Index = () => {
     { icon: Shirt, name: "Fashion", color: "text-purple-400" }
   ];
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <motion.div
+          className="h-16 w-16 rounded-full bg-gradient-primary"
+          animate={{ rotate: 360 }}
+          transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen relative overflow-hidden">
+      {/* Auth Navigation */}
+      <div className="absolute top-4 right-4 z-20">
+        {user ? (
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <User className="h-4 w-4" />
+              {user.email}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSignOut}
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Sign Out
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            onClick={() => navigate('/auth')}
+          >
+            <LogIn className="h-4 w-4 mr-2" />
+            Sign In
+          </Button>
+        )}
+      </div>
+
       {/* Animated background elements */}
       <div className="absolute inset-0 overflow-hidden">
         <motion.div

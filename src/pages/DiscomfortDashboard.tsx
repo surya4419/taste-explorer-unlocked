@@ -15,9 +15,15 @@ import {
   Bookmark,
   Sparkles,
   TrendingUp,
-  Brain
+  Brain,
+  RefreshCw,
+  LogIn
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/components/AuthProvider";
+import { useUserProgress } from "@/hooks/useUserProgress";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface DiscomfortItem {
   id: string;
@@ -25,9 +31,11 @@ interface DiscomfortItem {
   title: string;
   description: string;
   difficulty: number;
-  imageUrl: string;
+  image_url: string;
   reason: string;
-  culturalContext: string;
+  cultural_context: string;
+  metadata?: any;
+  external_id?: string;
 }
 
 const mockDiscomfortItems: DiscomfortItem[] = [
@@ -37,9 +45,9 @@ const mockDiscomfortItems: DiscomfortItem[] = [
     title: "The Tree of Life",
     description: "Terrence Malick's experimental meditation on existence",
     difficulty: 4,
-    imageUrl: "https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400",
+    image_url: "https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400",
     reason: "You enjoy fast-paced Marvel films - this will slow down your perception of time and build patience for visual poetry.",
-    culturalContext: "American experimental cinema"
+    cultural_context: "American experimental cinema"
   },
   {
     id: "2", 
@@ -47,9 +55,9 @@ const mockDiscomfortItems: DiscomfortItem[] = [
     title: "Aphex Twin - Selected Ambient Works",
     description: "Pioneering electronic ambient compositions",
     difficulty: 3,
-    imageUrl: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400",
+    image_url: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400",
     reason: "Since you prefer pop music, this will expand your appreciation for abstract soundscapes and experimental rhythm.",
-    culturalContext: "British electronic avant-garde"
+    cultural_context: "British electronic avant-garde"
   },
   {
     id: "3",
@@ -57,9 +65,9 @@ const mockDiscomfortItems: DiscomfortItem[] = [
     title: "Natto (Fermented Soybeans)",
     description: "Traditional Japanese breakfast with unique texture",
     difficulty: 5,
-    imageUrl: "https://images.unsplash.com/photo-1618160702438-9b02ab6515c9?w=400",
+    image_url: "https://images.unsplash.com/photo-1618160702438-9b02ab6515c9?w=400",
     reason: "You love comfort food - this challenging texture will reset your relationship with familiar flavors.",
-    culturalContext: "Japanese traditional cuisine"
+    cultural_context: "Japanese traditional cuisine"
   },
   {
     id: "4",
@@ -67,9 +75,9 @@ const mockDiscomfortItems: DiscomfortItem[] = [
     title: "Avant-Garde Asymmetrical Jacket",
     description: "Rei Kawakubo-inspired deconstructed silhouette",
     difficulty: 4,
-    imageUrl: "https://images.unsplash.com/photo-1582562124811-c09040d0a901?w=400",
+    image_url: "https://images.unsplash.com/photo-1582562124811-c09040d0a901?w=400",
     reason: "Your casual style preferences make this architectural approach to clothing a perfect discomfort zone.",
-    culturalContext: "Japanese conceptual fashion"
+    cultural_context: "Japanese conceptual fashion"
   }
 ];
 
@@ -97,37 +105,161 @@ const getDifficultyColor = (difficulty: number) => {
 
 const DiscomfortDashboard = () => {
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
+  const { progress, trackProgress, profile } = useUserProgress();
+  const { toast } = useToast();
   const [items, setItems] = useState<DiscomfortItem[]>([]);
-  const [savedItems, setSavedItems] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(true);
 
   useEffect(() => {
-    // Load taste profile and generate discomfort items
-    const profile = localStorage.getItem('tasteProfile');
-    if (!profile) {
-      navigate('/onboarding');
+    if (!authLoading && !user) {
+      // Redirect to auth if not logged in
+      navigate('/auth');
       return;
     }
-    
-    setItems(mockDiscomfortItems);
-  }, [navigate]);
 
-  const currentItem = items[currentIndex];
-
-  const handleAction = (action: 'try' | 'save' | 'skip') => {
-    if (action === 'save') {
-      setSavedItems(prev => [...prev, currentItem.id]);
+    if (user) {
+      loadRecommendations();
     }
-    
-    if (currentIndex < items.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    } else {
-      // Reset or navigate to curriculum
-      setCurrentIndex(0);
+  }, [user, authLoading, navigate]);
+
+  const loadRecommendations = async () => {
+    if (!user) return;
+
+    try {
+      setLoadingRecommendations(true);
+
+      // First try to load existing recommendations
+      const { data: existingRecs, error: fetchError } = await supabase
+        .from('content_recommendations')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (fetchError) {
+        console.error('Error fetching recommendations:', fetchError);
+      }
+
+      if (existingRecs && existingRecs.length > 0) {
+        const formattedItems = existingRecs.map(rec => ({
+          id: rec.id,
+          domain: rec.domain,
+          title: rec.title,
+          description: rec.description || '',
+          difficulty: rec.difficulty || 3,
+          image_url: rec.image_url || '',
+          reason: rec.reason || '',
+          cultural_context: rec.cultural_context || '',
+          metadata: rec.metadata,
+          external_id: rec.external_id
+        }));
+        setItems(formattedItems);
+      } else {
+        // Generate new recommendations if none exist
+        await generateRecommendations();
+      }
+    } catch (error) {
+      console.error('Error loading recommendations:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load recommendations',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoadingRecommendations(false);
     }
   };
 
-  if (!currentItem) {
+  const generateRecommendations = async () => {
+    if (!user) return;
+
+    try {
+      setIsGenerating(true);
+
+      const { data, error } = await supabase.functions.invoke('generate-recommendations', {
+        body: {
+          userId: user.id,
+          preferences: profile?.taste_preferences || {},
+          domain: 'all',
+          difficulty: 3
+        }
+      });
+
+      if (error) {
+        console.error('Error generating recommendations:', error);
+        toast({
+          title: 'Error',
+          description: 'Failed to generate recommendations',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      if (data.recommendations) {
+        const formattedItems = data.recommendations.map((rec: any) => ({
+          id: rec.id,
+          domain: rec.domain,
+          title: rec.title,
+          description: rec.description || '',
+          difficulty: rec.difficulty || 3,
+          image_url: rec.image_url || '',
+          reason: rec.reason || '',
+          cultural_context: rec.cultural_context || '',
+          metadata: rec.metadata,
+          external_id: rec.external_id
+        }));
+        setItems(formattedItems);
+        setCurrentIndex(0);
+
+        toast({
+          title: 'Success!',
+          description: 'New recommendations generated',
+        });
+      }
+    } catch (error) {
+      console.error('Error generating recommendations:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to generate recommendations',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const currentItem = items[currentIndex];
+
+  const handleAction = async (action: 'try' | 'save' | 'skip') => {
+    if (!currentItem || !user) return;
+
+    // Track the action in the database
+    await trackProgress(
+      currentItem.id,
+      'recommendation',
+      action === 'try' ? 'completed' : action === 'save' ? 'saved' : 'skipped',
+      currentItem.domain,
+      currentItem.difficulty,
+      { action, timestamp: new Date().toISOString() }
+    );
+
+    // Move to next item
+    if (currentIndex < items.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+    } else {
+      // Reset to beginning or generate new recommendations
+      setCurrentIndex(0);
+      toast({
+        title: 'All recommendations viewed!',
+        description: 'Generate new ones or revisit previous challenges.',
+      });
+    }
+  };
+
+  if (authLoading || loadingRecommendations) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -136,10 +268,70 @@ const DiscomfortDashboard = () => {
             animate={{ rotate: 360 }}
             transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
           />
-          <p className="text-lg text-muted-foreground">Loading your discomfort zone...</p>
+          <p className="text-lg text-muted-foreground">
+            {authLoading ? 'Checking authentication...' : 'Loading your discomfort zone...'}
+          </p>
         </div>
       </div>
     );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="glass-card text-center max-w-md">
+          <CardContent className="p-8">
+            <LogIn className="h-16 w-16 mx-auto mb-4 text-primary" />
+            <h2 className="text-2xl font-bold mb-4">Authentication Required</h2>
+            <p className="text-muted-foreground mb-6">
+              Please sign in to access your personalized discomfort dashboard and track your progress.
+            </p>
+            <Button onClick={() => navigate('/auth')} variant="default" size="lg">
+              <LogIn className="h-4 w-4 mr-2" />
+              Sign In
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!currentItem && items.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="glass-card text-center max-w-md">
+          <CardContent className="p-8">
+            <Brain className="h-16 w-16 mx-auto mb-4 text-primary" />
+            <h2 className="text-2xl font-bold mb-4">Ready to Generate Recommendations?</h2>
+            <p className="text-muted-foreground mb-6">
+              Let's create personalized discomfort challenges based on your preferences.
+            </p>
+            <Button 
+              onClick={generateRecommendations} 
+              variant="default" 
+              size="lg"
+              disabled={isGenerating}
+            >
+              {isGenerating ? (
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                </motion.div>
+              ) : (
+                <Sparkles className="h-4 w-4 mr-2" />
+              )}
+              {isGenerating ? 'Generating...' : 'Generate Recommendations'}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!currentItem) {
+    return null;
   }
 
   const Icon = getDomainIcon(currentItem.domain);
@@ -168,6 +360,24 @@ const DiscomfortDashboard = () => {
           </div>
           
           <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              onClick={generateRecommendations}
+              disabled={isGenerating}
+              size="sm"
+            >
+              {isGenerating ? (
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                </motion.div>
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              {isGenerating ? 'Generating...' : 'New Recommendations'}
+            </Button>
             <Button variant="outline" onClick={() => navigate('/curriculum')}>
               <TrendingUp className="h-4 w-4 mr-2" />
               Curriculum
@@ -181,7 +391,7 @@ const DiscomfortDashboard = () => {
         {/* Progress */}
         <div className="flex justify-between text-sm text-muted-foreground mb-2">
           <span>Challenge {currentIndex + 1} of {items.length}</span>
-          <span>{savedItems.length} saved for later</span>
+          <span>{progress.filter(p => p.status === 'saved').length} saved for later</span>
         </div>
         <div className="w-full bg-muted rounded-full h-2">
           <motion.div 
@@ -208,7 +418,7 @@ const DiscomfortDashboard = () => {
               <div className="md:w-1/3">
                 <div className="relative h-64 md:h-full">
                   <img 
-                    src={currentItem.imageUrl}
+                    src={currentItem.image_url}
                     alt={currentItem.title}
                     className="w-full h-full object-cover"
                   />
@@ -236,7 +446,7 @@ const DiscomfortDashboard = () => {
                     {currentItem.description}
                   </p>
                   <Badge variant="outline" className="w-fit">
-                    {currentItem.culturalContext}
+                    {currentItem.cultural_context}
                   </Badge>
                 </CardHeader>
 
@@ -322,7 +532,9 @@ const DiscomfortDashboard = () => {
             <p className="text-sm text-muted-foreground">Challenges Seen</p>
           </Card>
           <Card className="glass-card text-center p-4">
-            <p className="text-2xl font-bold text-secondary">{savedItems.length}</p>
+            <p className="text-2xl font-bold text-secondary">
+              {progress.filter(p => p.status === 'saved').length}
+            </p>
             <p className="text-sm text-muted-foreground">Saved</p>
           </Card>
           <Card className="glass-card text-center p-4">

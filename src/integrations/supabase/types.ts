@@ -14,7 +14,123 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      content_recommendations: {
+        Row: {
+          created_at: string | null
+          cultural_context: string | null
+          description: string | null
+          difficulty: number | null
+          domain: string
+          external_id: string | null
+          id: string
+          image_url: string | null
+          metadata: Json | null
+          reason: string | null
+          title: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          cultural_context?: string | null
+          description?: string | null
+          difficulty?: number | null
+          domain: string
+          external_id?: string | null
+          id?: string
+          image_url?: string | null
+          metadata?: Json | null
+          reason?: string | null
+          title: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          cultural_context?: string | null
+          description?: string | null
+          difficulty?: number | null
+          domain?: string
+          external_id?: string | null
+          id?: string
+          image_url?: string | null
+          metadata?: Json | null
+          reason?: string | null
+          title?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_profiles: {
+        Row: {
+          created_at: string | null
+          display_name: string | null
+          id: string
+          onboarding_completed: boolean | null
+          taste_preferences: Json | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          display_name?: string | null
+          id?: string
+          onboarding_completed?: boolean | null
+          taste_preferences?: Json | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          display_name?: string | null
+          id?: string
+          onboarding_completed?: boolean | null
+          taste_preferences?: Json | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_progress: {
+        Row: {
+          created_at: string | null
+          difficulty: number | null
+          domain: string
+          id: string
+          item_id: string
+          item_type: string
+          metadata: Json | null
+          status: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          difficulty?: number | null
+          domain: string
+          id?: string
+          item_id: string
+          item_type: string
+          metadata?: Json | null
+          status: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          difficulty?: number | null
+          domain?: string
+          id?: string
+          item_id?: string
+          item_type?: string
+          metadata?: Json | null
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
