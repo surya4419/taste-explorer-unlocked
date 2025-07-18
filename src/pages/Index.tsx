@@ -17,22 +17,86 @@ import {
   Compass,
   LogIn,
   LogOut,
-  User
+  User,
+  Calendar,
+  Map
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/components/AuthProvider";
+import { useTasteJourney } from "@/hooks/useTasteJourney";
+import { useUserProgress } from "@/hooks/useUserProgress";
+import { TasteJourneyVisualization } from "@/components/TasteJourneyVisualization";
 
 const Index = () => {
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
+  const { profile } = useUserProgress();
+  const { 
+    journeyData, 
+    loading: journeyLoading, 
+    startTasteJourney, 
+    generateProgressivePath,
+    createFiveDayPlan 
+  } = useTasteJourney();
+  
   const [isLoaded, setIsLoaded] = useState(false);
+  const [showJourney, setShowJourney] = useState(false);
+  const [selectedDomain, setSelectedDomain] = useState<string>('film');
+  const [currentStep, setCurrentStep] = useState(0);
 
   useEffect(() => {
     setIsLoaded(true);
   }, []);
 
+  // Auto-start taste journey when user logs in and has completed onboarding
+  useEffect(() => {
+    if (user && profile?.onboarding_completed && profile?.taste_preferences && !journeyData) {
+      console.log('User logged in with completed onboarding, starting taste journey...');
+      setShowJourney(true);
+      startTasteJourney(profile.taste_preferences)
+        .then(() => {
+          // Generate initial progressive path for film domain
+          return generateProgressivePath('film', 'Marvel Movies', 'Andrei Tarkovsky Films');
+        })
+        .catch(error => {
+          console.error('Error starting taste journey:', error);
+        });
+    }
+  }, [user, profile, journeyData, startTasteJourney, generateProgressivePath]);
+
   const handleSignOut = async () => {
     await signOut();
+    setShowJourney(false);
+  };
+
+  const handleStepComplete = (stepIndex: number) => {
+    setCurrentStep(stepIndex + 1);
+  };
+
+  const handleStartChallenge = (step: any) => {
+    console.log('Starting challenge:', step);
+    navigate('/dashboard');
+  };
+
+  const handleDomainChange = async (domain: string) => {
+    setSelectedDomain(domain);
+    setCurrentStep(0);
+    
+    if (journeyData) {
+      // Generate new progressive path for selected domain
+      const domainTargets: Record<string, { current: string; target: string }> = {
+        film: { current: 'Marvel Movies', target: 'Andrei Tarkovsky Films' },
+        music: { current: 'Pop Music', target: 'Experimental Jazz' },
+        books: { current: 'Popular Fiction', target: 'Modernist Literature' },
+        food: { current: 'Comfort Food', target: 'Fermented Cuisine' },
+        fashion: { current: 'Casual Style', target: 'Avant-Garde Fashion' }
+      };
+      
+      const targets = domainTargets[domain];
+      if (targets) {
+        await generateProgressivePath(domain, targets.current, targets.target);
+      }
+    }
   };
 
   const features = [
@@ -230,6 +294,132 @@ const Index = () => {
             </Button>
           </motion.div>
         </motion.div>
+
+        {/* Dynamic Taste Journey - Shows After Login */}
+        {user && showJourney && journeyData && (
+          <motion.div 
+            className="max-w-6xl mx-auto mb-16 w-full"
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.5 }}
+          >
+            {/* Journey Header */}
+            <div className="text-center mb-8">
+              <h2 className="text-3xl font-bold gradient-text mb-4">Your Personalized Taste Journey</h2>
+              <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
+                AI-powered progressive paths designed to expand your cultural horizons
+              </p>
+            </div>
+
+            {/* AI Onboarding Report */}
+            {journeyData.onboardingReport && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="mb-8"
+              >
+                <Card className="glass-card bg-gradient-to-r from-primary/10 to-accent/10 border-primary/20">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Brain className="h-5 w-5 text-primary" />
+                      AI Analysis Report
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-muted-foreground leading-relaxed">
+                      {journeyData.onboardingReport}
+                    </p>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+
+            {/* Domain Selector */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="mb-8"
+            >
+              <div className="flex justify-center gap-2 mb-6">
+                {domains.map((domain) => {
+                  const Icon = domain.icon;
+                  return (
+                    <Button
+                      key={domain.name}
+                      variant={selectedDomain === domain.name.toLowerCase() ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleDomainChange(domain.name.toLowerCase())}
+                      className="flex items-center gap-2"
+                      disabled={journeyLoading}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {domain.name}
+                    </Button>
+                  );
+                })}
+              </div>
+            </motion.div>
+
+            {/* Progressive Path Visualization */}
+            {journeyData.progressivePaths[selectedDomain] && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+              >
+                <TasteJourneyVisualization
+                  domain={selectedDomain}
+                  progressivePath={journeyData.progressivePaths[selectedDomain]}
+                  currentStep={currentStep}
+                  onStepComplete={handleStepComplete}
+                  onStartChallenge={handleStartChallenge}
+                />
+              </motion.div>
+            )}
+
+            {/* 5-Day Plan Section */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.6 }}
+              className="mt-12 text-center"
+            >
+              <Button
+                variant="explore"
+                size="lg"
+                onClick={() => createFiveDayPlan(profile?.taste_preferences, selectedDomain)}
+                disabled={journeyLoading}
+                className="group"
+              >
+                <Calendar className="h-5 w-5 mr-2 group-hover:animate-pulse" />
+                {journeyLoading ? 'Creating Plan...' : 'Generate 5-Day Challenge Plan'}
+                <ArrowRight className="h-5 w-5 ml-2 group-hover:translate-x-1 transition-transform" />
+              </Button>
+            </motion.div>
+
+            {/* Journey Loading State */}
+            {journeyLoading && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex justify-center items-center py-8"
+              >
+                <div className="text-center">
+                  <motion.div
+                    className="h-12 w-12 mx-auto mb-4 rounded-full bg-gradient-primary"
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                  />
+                  <p className="text-muted-foreground">
+                    AI is crafting your personalized journey...
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </motion.div>
+        )}
 
         {/* Features Section */}
         <motion.div 
