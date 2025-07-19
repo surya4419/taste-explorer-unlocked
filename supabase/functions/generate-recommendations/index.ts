@@ -157,7 +157,7 @@ Deno.serve(async (req) => {
       try {
         const qlooResponse = await supabaseClient.functions.invoke('qloo-api', {
           body: {
-            endpoint: 'v2/insights',
+            endpoint: 'insights',
             method: 'POST',
             body: {
               filter: {
