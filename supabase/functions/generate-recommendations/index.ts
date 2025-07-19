@@ -19,16 +19,21 @@ serve(async (req) => {
   }
 
   try {
+    const authHeader = req.headers.get('Authorization');
+    console.log('Auth header present:', !!authHeader);
+
     // Initialize Supabase client
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       {
         global: {
-          headers: { Authorization: req.headers.get('Authorization')! },
+          headers: { Authorization: authHeader! },
         },
       }
     );
+
+    console.log('Attempting to get user from JWT...');
 
     // Get user from JWT
     const {
@@ -36,9 +41,19 @@ serve(async (req) => {
       error: userError,
     } = await supabaseClient.auth.getUser();
 
+    console.log('User retrieval result:', { 
+      hasUser: !!user, 
+      userId: user?.id, 
+      error: userError?.message 
+    });
+
     if (userError || !user) {
+      console.error('Authentication failed:', userError);
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
+        JSON.stringify({ 
+          error: 'Unauthorized', 
+          details: userError?.message || 'No user found' 
+        }),
         {
           status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -53,7 +68,7 @@ serve(async (req) => {
     // Call Qloo API to get insights
     const qlooResponse = await supabaseClient.functions.invoke('qloo-api', {
       body: {
-        endpoint: 'v2/insights',
+        endpoint: 'insights',
         method: 'POST',
         body: {
           filter: {
