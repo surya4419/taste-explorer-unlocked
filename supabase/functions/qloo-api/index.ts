@@ -56,7 +56,7 @@ serve(async (req) => {
     console.log('Qloo API request:', { endpoint, method, params, body });
 
     // Construct Qloo API URL
-    const baseUrl = 'https://api.qloo.com/v1';
+    const baseUrl = 'https://hackathon.api.qloo.com';
     let qlooUrl = `${baseUrl}/${endpoint}`;
 
     // Add query parameters for GET requests
