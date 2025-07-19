@@ -48,7 +48,7 @@ async function getValidTags(supabaseClient: any, domain: string) {
   try {
     const { data, error } = await supabaseClient.functions.invoke('qloo-api', {
       body: {
-        endpoint: 'v2/tags',
+        endpoint: 'tags',
         method: 'GET',
         params: {
           limit: 10
