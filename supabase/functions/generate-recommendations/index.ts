@@ -21,7 +21,6 @@ async function getValidTags(supabaseClient: any, domain: string) {
         endpoint: 'tags',
         method: 'GET',
         params: {
-          q: domain,
           limit: 10
         }
       }
@@ -29,21 +28,18 @@ async function getValidTags(supabaseClient: any, domain: string) {
 
     if (error || !data?.data) {
       console.log('Using fallback tags for domain:', domain);
-      // Fallback tags based on domain
-      const fallbackTags = {
-        film: ['action', 'drama', 'comedy', 'thriller'],
-        music: ['pop', 'rock', 'electronic', 'jazz'],
-        books: ['fiction', 'mystery', 'romance', 'fantasy'],
-        food: ['italian', 'asian', 'comfort-food', 'healthy'],
-        fashion: ['casual', 'formal', 'streetwear', 'vintage']
-      };
-      return fallbackTags[domain as keyof typeof fallbackTags] || ['popular'];
+      // Return empty array if no valid tags can be retrieved
+      return [];
     }
 
-    return data.data.map((tag: any) => tag.id || tag.name).slice(0, 5);
+    // Only return tags that have valid IDs
+    return data.data
+      .filter((tag: any) => tag.id)
+      .map((tag: any) => tag.id)
+      .slice(0, 5);
   } catch (error) {
     console.error('Error getting tags:', error);
-    return ['popular'];
+    return [];
   }
 }
 
