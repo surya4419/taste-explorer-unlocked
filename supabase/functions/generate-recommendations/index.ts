@@ -18,7 +18,15 @@ function sanitizeMetadata(obj: any): any {
     return null;
   }
   
-  if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
+  if (typeof obj === 'string' || typeof obj === 'boolean') {
+    return obj;
+  }
+  
+  if (typeof obj === 'number') {
+    // Handle NaN, Infinity, and -Infinity which are not valid JSON
+    if (!Number.isFinite(obj)) {
+      return null;
+    }
     return obj;
   }
   
