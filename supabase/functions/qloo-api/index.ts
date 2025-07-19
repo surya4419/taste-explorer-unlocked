@@ -7,10 +7,24 @@ const corsHeaders = {
 };
 
 interface QlooRequest {
-  endpoint: 'affinity-cluster' | 'recipes/antitheses' | 'cross-domain-affinity';
+  endpoint: 'insights' | 'tags' | 'affinity-cluster' | 'recipes/antitheses' | 'cross-domain-affinity';
   method: 'GET' | 'POST';
   params?: Record<string, any>;
-  body?: Record<string, any>;
+  body?: {
+    filter?: {
+      type: 'urn:entity:artist' | 'urn:entity:book' | 'urn:entity:brand' | 'urn:entity:destination' | 'urn:entity:movie' | 'urn:entity:person' | 'urn:entity:place' | 'urn:entity:podcast' | 'urn:entity:tv_show' | 'urn:entity:video_game';
+      ids?: string[];
+      tags?: string[];
+    };
+    signal?: {
+      interests?: {
+        tags?: string[];
+      };
+      likes?: string[];
+      dislikes?: string[];
+    };
+    limit?: number;
+  };
 }
 
 serve(async (req) => {

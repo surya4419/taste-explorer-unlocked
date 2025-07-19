@@ -48,86 +48,95 @@ serve(async (req) => {
 
     const { preferences, domain, difficulty = 3 } = await req.json() as RecommendationRequest;
 
-    // Mock recommendation generation (in real implementation, you'd call Qloo API or other services)
-    const mockRecommendations = [
-      {
-        domain: 'film',
-        title: 'Stalker (1979)',
-        description: 'Andrei Tarkovsky\'s philosophical science fiction meditation',
-        difficulty: 5,
-        image_url: 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
-        reason: 'Your enjoyment of mainstream cinema makes this slow-burn Soviet masterpiece a perfect challenge for developing patience with contemplative storytelling.',
-        cultural_context: 'Soviet philosophical cinema',
-        metadata: {
-          director: 'Andrei Tarkovsky',
-          year: 1979,
-          genre: 'Sci-Fi/Art Film',
-          runtime: '163 min'
-        }
-      },
-      {
-        domain: 'music',
-        title: 'Gamelan Degung',
-        description: 'Traditional Indonesian court music ensemble',
-        difficulty: 4,
-        image_url: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400',
-        reason: 'Given your Western pop preferences, this Indonesian traditional music will introduce you to non-Western scales and communal music-making concepts.',
-        cultural_context: 'Indonesian traditional music',
-        metadata: {
-          origin: 'West Java, Indonesia',
-          instruments: 'Bronze metallophones, gongs, drums',
-          scale: 'Pelog and Slendro'
-        }
-      },
-      {
-        domain: 'food',
-        title: 'Hákarl (Fermented Shark)',
-        description: 'Traditional Icelandic fermented shark delicacy',
-        difficulty: 5,
-        image_url: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        reason: 'Your comfort with familiar flavors makes this intensely unique Icelandic tradition the ultimate test of culinary openness.',
-        cultural_context: 'Traditional Icelandic cuisine',
-        metadata: {
-          preparation: 'Buried for 4-5 months, then hung for 4-5 months',
-          origin: 'Iceland',
-          significance: 'Survival food turned cultural identity'
-        }
-      },
-      {
-        domain: 'books',
-        title: 'Finnegans Wake',
-        description: 'James Joyce\'s experimental stream-of-consciousness novel',
-        difficulty: 5,
-        image_url: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400',
-        reason: 'Your preference for straightforward narratives makes Joyce\'s linguistic playground a transformative challenge in reading comprehension.',
-        cultural_context: 'Irish literary modernism',
-        metadata: {
-          author: 'James Joyce',
-          published: 1939,
-          pages: 628,
-          languages: 'Multiple (dream language)'
-        }
-      },
-      {
-        domain: 'fashion',
-        title: 'Comme des Garçons Deconstructed Coat',
-        description: 'Rei Kawakubo\'s avant-garde architectural fashion',
-        difficulty: 4,
-        image_url: 'https://images.unsplash.com/photo-1582562124811-c09040d0a901?w=400',
-        reason: 'Your conventional style choices make this radical deconstruction of clothing norms a perfect entry into conceptual fashion.',
-        cultural_context: 'Japanese avant-garde fashion',
-        metadata: {
-          designer: 'Rei Kawakubo',
-          movement: 'Deconstructivism',
-          philosophy: 'Anti-fashion, conceptual design'
+    console.log('Generating recommendations for:', { domain, difficulty, preferences });
+
+    // Call Qloo API to get insights
+    const qlooResponse = await supabaseClient.functions.invoke('qloo-api', {
+      body: {
+        endpoint: 'v2/insights',
+        method: 'POST',
+        body: {
+          filter: {
+            type: domain === 'film' ? 'urn:entity:movie' : 
+                  domain === 'music' ? 'urn:entity:artist' :
+                  domain === 'books' ? 'urn:entity:book' :
+                  domain === 'food' ? 'urn:entity:brand' :
+                  'urn:entity:movie', // default
+            limit: 10
+          },
+          signal: {
+            interests: {
+              tags: preferences.tags || []
+            }
+          }
         }
       }
-    ];
+    });
 
-    // Filter recommendations by domain if specified
-    let filteredRecommendations = mockRecommendations;
+    let recommendations = [];
+
+    if (qlooResponse.error) {
+      console.error('Qloo API error:', qlooResponse.error);
+      // Fall back to mock data if Qloo API fails
+      recommendations = [
+        {
+          domain: domain === 'all' ? 'film' : domain,
+          title: 'Cultural Discovery',
+          description: 'A thoughtfully curated recommendation based on your preferences',
+          difficulty: difficulty,
+          image_url: 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
+          reason: 'This recommendation challenges your current tastes while providing a gateway to new cultural experiences.',
+          cultural_context: 'Cross-cultural exploration',
+          metadata: {
+            source: 'fallback',
+            generated_at: new Date().toISOString()
+          }
+        }
+      ];
+    } else {
+      // Transform Qloo API response into our recommendation format
+      const qlooData = qlooResponse.data;
+      console.log('Qloo API response:', qlooData);
+      
+      if (qlooData.data && Array.isArray(qlooData.data)) {
+        recommendations = qlooData.data.slice(0, 5).map((item: any, index: number) => ({
+          domain: domain === 'all' ? 'film' : domain,
+          title: item.name || item.title || `Recommendation ${index + 1}`,
+          description: item.description || 'A cultural recommendation from Qloo API',
+          difficulty: Math.max(1, Math.min(5, difficulty + Math.floor(Math.random() * 3) - 1)),
+          image_url: item.image_url || 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
+          reason: `Based on your preferences, this ${domain} recommendation offers a perfect balance of familiarity and cultural expansion.`,
+          cultural_context: item.cultural_context || 'Contemporary cultural exploration',
+          metadata: {
+            qloo_id: item.id,
+            generated_at: new Date().toISOString(),
+            ...item
+          }
+        }));
+      } else {
+        // Fallback if response structure is unexpected
+        recommendations = [
+          {
+            domain: domain === 'all' ? 'film' : domain,
+            title: 'Cultural Discovery',
+            description: 'A thoughtfully curated recommendation',
+            difficulty: difficulty,
+            image_url: 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
+            reason: 'This recommendation challenges your current tastes while providing a gateway to new cultural experiences.',
+            cultural_context: 'Cross-cultural exploration',
+            metadata: {
+              source: 'qloo_processed',
+              generated_at: new Date().toISOString()
+            }
+          }
+        ];
+      }
+    }
+
+    // Filter recommendations by domain if specified (already filtered in Qloo API call)
+    let filteredRecommendations = recommendations;
     if (domain && domain !== 'all') {
-      filteredRecommendations = mockRecommendations.filter(rec => rec.domain === domain);
+      filteredRecommendations = recommendations.filter(rec => rec.domain === domain);
     }
 
     // Generate AI-powered difficulty adjustment based on user preferences
