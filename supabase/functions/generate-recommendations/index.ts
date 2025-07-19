@@ -13,6 +13,40 @@ interface RecommendationRequest {
   difficulty?: number;
 }
 
+// Helper function to get valid tags from Qloo
+async function getValidTags(supabaseClient: any, domain: string) {
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('qloo-api', {
+      body: {
+        endpoint: 'tags',
+        method: 'GET',
+        params: {
+          q: domain,
+          limit: 10
+        }
+      }
+    });
+
+    if (error || !data?.data) {
+      console.log('Using fallback tags for domain:', domain);
+      // Fallback tags based on domain
+      const fallbackTags = {
+        film: ['action', 'drama', 'comedy', 'thriller'],
+        music: ['pop', 'rock', 'electronic', 'jazz'],
+        books: ['fiction', 'mystery', 'romance', 'fantasy'],
+        food: ['italian', 'asian', 'comfort-food', 'healthy'],
+        fashion: ['casual', 'formal', 'streetwear', 'vintage']
+      };
+      return fallbackTags[domain as keyof typeof fallbackTags] || ['popular'];
+    }
+
+    return data.data.map((tag: any) => tag.id || tag.name).slice(0, 5);
+  } catch (error) {
+    console.error('Error getting tags:', error);
+    return ['popular'];
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -65,23 +99,34 @@ serve(async (req) => {
 
     console.log('Generating recommendations for:', { domain, difficulty, preferences });
 
-    // Call Qloo API to get insights
+    // Map domain to Qloo entity type
+    const entityTypeMap: Record<string, string> = {
+      film: 'urn:entity:movie',
+      music: 'urn:entity:artist',
+      books: 'urn:entity:book',
+      food: 'urn:entity:brand',
+      fashion: 'urn:entity:brand'
+    };
+
+    const entityType = entityTypeMap[domain] || 'urn:entity:movie';
+
+    // Get valid tags for the domain
+    const validTags = await getValidTags(supabaseClient, domain);
+    console.log('Using tags:', validTags);
+
+    // Call Qloo API to get insights with correct parameters
     const qlooResponse = await supabaseClient.functions.invoke('qloo-api', {
       body: {
         endpoint: 'insights',
         method: 'POST',
         body: {
           filter: {
-            type: domain === 'film' ? 'urn:entity:movie' : 
-                  domain === 'music' ? 'urn:entity:artist' :
-                  domain === 'books' ? 'urn:entity:book' :
-                  domain === 'food' ? 'urn:entity:brand' :
-                  'urn:entity:movie', // default
+            type: entityType,
             limit: 10
           },
           signal: {
             interests: {
-              tags: preferences.tags || []
+              tags: validTags
             }
           }
         }
@@ -92,70 +137,42 @@ serve(async (req) => {
 
     if (qlooResponse.error) {
       console.error('Qloo API error:', qlooResponse.error);
-      // Fall back to mock data if Qloo API fails
-      recommendations = [
-        {
-          domain: domain === 'all' ? 'film' : domain,
-          title: 'Cultural Discovery',
-          description: 'A thoughtfully curated recommendation based on your preferences',
-          difficulty: difficulty,
-          image_url: 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
-          reason: 'This recommendation challenges your current tastes while providing a gateway to new cultural experiences.',
-          cultural_context: 'Cross-cultural exploration',
-          metadata: {
-            source: 'fallback',
-            generated_at: new Date().toISOString()
-          }
-        }
-      ];
+      // Create enhanced fallback recommendations
+      recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
     } else {
       // Transform Qloo API response into our recommendation format
       const qlooData = qlooResponse.data;
-      console.log('Qloo API response:', qlooData);
+      console.log('Qloo API response structure:', Object.keys(qlooData || {}));
       
-      if (qlooData.data && Array.isArray(qlooData.data)) {
+      if (qlooData?.data && Array.isArray(qlooData.data)) {
         recommendations = qlooData.data.slice(0, 5).map((item: any, index: number) => ({
           domain: domain === 'all' ? 'film' : domain,
-          title: item.name || item.title || `Recommendation ${index + 1}`,
-          description: item.description || 'A cultural recommendation from Qloo API',
+          title: item.name || item.title || `${domain} Recommendation ${index + 1}`,
+          description: item.description || `A curated ${domain} recommendation from our cultural database`,
           difficulty: Math.max(1, Math.min(5, difficulty + Math.floor(Math.random() * 3) - 1)),
-          image_url: item.image_url || 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
-          reason: `Based on your preferences, this ${domain} recommendation offers a perfect balance of familiarity and cultural expansion.`,
-          cultural_context: item.cultural_context || 'Contemporary cultural exploration',
+          image_url: item.image_url || getDefaultImage(domain),
+          reason: generateReason(domain, preferences),
+          cultural_context: item.cultural_context || `Contemporary ${domain} exploration`,
           metadata: {
             qloo_id: item.id,
             generated_at: new Date().toISOString(),
+            source: 'qloo_api',
             ...item
           }
         }));
       } else {
-        // Fallback if response structure is unexpected
-        recommendations = [
-          {
-            domain: domain === 'all' ? 'film' : domain,
-            title: 'Cultural Discovery',
-            description: 'A thoughtfully curated recommendation',
-            difficulty: difficulty,
-            image_url: 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
-            reason: 'This recommendation challenges your current tastes while providing a gateway to new cultural experiences.',
-            cultural_context: 'Cross-cultural exploration',
-            metadata: {
-              source: 'qloo_processed',
-              generated_at: new Date().toISOString()
-            }
-          }
-        ];
+        console.log('Unexpected Qloo response structure, using fallback');
+        recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
       }
     }
 
-    // Filter recommendations by domain if specified (already filtered in Qloo API call)
-    let filteredRecommendations = recommendations;
-    if (domain && domain !== 'all') {
-      filteredRecommendations = recommendations.filter(rec => rec.domain === domain);
+    // Ensure we have at least some recommendations
+    if (recommendations.length === 0) {
+      recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
     }
 
-    // Generate AI-powered difficulty adjustment based on user preferences
-    const adjustedRecommendations = filteredRecommendations.map(rec => ({
+    // Adjust difficulty based on user preference
+    const adjustedRecommendations = recommendations.map(rec => ({
       ...rec,
       difficulty: Math.max(1, Math.min(5, rec.difficulty + (difficulty - 3)))
     }));
@@ -166,7 +183,7 @@ serve(async (req) => {
       .upsert(
         adjustedRecommendations.map(rec => ({
           user_id: user.id,
-          external_id: `mock_${rec.domain}_${Date.now()}`,
+          external_id: rec.metadata?.qloo_id || `fallback_${rec.domain}_${Date.now()}_${Math.random()}`,
           domain: rec.domain,
           title: rec.title,
           description: rec.description,
@@ -183,7 +200,7 @@ serve(async (req) => {
     if (saveError) {
       console.error('Error saving recommendations:', saveError);
       return new Response(
-        JSON.stringify({ error: 'Failed to save recommendations' }),
+        JSON.stringify({ error: 'Failed to save recommendations', details: saveError.message }),
         {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -191,10 +208,13 @@ serve(async (req) => {
       );
     }
 
+    console.log(`Successfully generated and saved ${savedRecommendations?.length || 0} recommendations`);
+
     return new Response(
       JSON.stringify({ 
         recommendations: savedRecommendations,
-        message: 'Recommendations generated successfully'
+        message: 'Recommendations generated successfully',
+        source: qlooResponse.error ? 'fallback' : 'qloo_api'
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -204,7 +224,7 @@ serve(async (req) => {
   } catch (error) {
     console.error('Error in generate-recommendations:', error);
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
+      JSON.stringify({ error: 'Internal server error', details: error.message }),
       {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -212,3 +232,133 @@ serve(async (req) => {
     );
   }
 });
+
+// Helper functions
+function getDefaultImage(domain: string): string {
+  const images: Record<string, string> = {
+    film: 'https://images.unsplash.com/photo-1489599651372-014db5c0d3d2?w=400',
+    music: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400',
+    books: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400',
+    food: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ca4b?w=400',
+    fashion: 'https://images.unsplash.com/photo-1445205170230-053b83016050?w=400'
+  };
+  return images[domain] || images.film;
+}
+
+function generateReason(domain: string, preferences: any): string {
+  const reasons: Record<string, string> = {
+    film: 'Based on your viewing preferences, this film will challenge your narrative expectations while maintaining visual appeal.',
+    music: 'This musical selection expands your sonic palette by introducing new rhythmic and harmonic elements.',
+    books: 'This literary work bridges familiar themes with new storytelling approaches to broaden your reading horizons.',
+    food: 'This culinary experience introduces new flavors and textures that complement your existing taste preferences.',
+    fashion: 'This style choice pushes your aesthetic boundaries while remaining wearable and expressive.'
+  };
+  return reasons[domain] || 'This recommendation is designed to expand your cultural comfort zone in meaningful ways.';
+}
+
+async function createFallbackRecommendations(domain: string, difficulty: number, preferences: any) {
+  const fallbackData: Record<string, any[]> = {
+    film: [
+      {
+        title: 'The Tree of Life',
+        description: 'Terrence Malick\'s experimental meditation on existence',
+        cultural_context: 'American experimental cinema'
+      },
+      {
+        title: 'Persona',
+        description: 'Ingmar Bergman\'s psychological masterpiece',
+        cultural_context: 'Swedish art cinema'
+      },
+      {
+        title: 'Chungking Express',
+        description: 'Wong Kar-wai\'s vibrant Hong Kong romance',
+        cultural_context: 'Hong Kong New Wave'
+      }
+    ],
+    music: [
+      {
+        title: 'Aphex Twin - Selected Ambient Works',
+        description: 'Pioneering electronic ambient compositions',
+        cultural_context: 'British electronic avant-garde'
+      },
+      {
+        title: 'Godspeed You! Black Emperor - F#A#∞',
+        description: 'Post-rock orchestral soundscapes',
+        cultural_context: 'Canadian post-rock movement'
+      },
+      {
+        title: 'Alice Coltrane - Journey in Satchidananda',
+        description: 'Spiritual jazz with Eastern influences',
+        cultural_context: 'American spiritual jazz'
+      }
+    ],
+    books: [
+      {
+        title: 'If on a winter\'s night a traveler',
+        description: 'Italo Calvino\'s metafictional masterpiece',
+        cultural_context: 'Italian postmodern literature'
+      },
+      {
+        title: 'The Left Hand of Darkness',
+        description: 'Ursula K. Le Guin\'s gender-bending sci-fi',
+        cultural_context: 'American speculative fiction'
+      },
+      {
+        title: 'Blindness',
+        description: 'José Saramago\'s allegorical novel',
+        cultural_context: 'Portuguese magical realism'
+      }
+    ],
+    food: [
+      {
+        title: 'Natto (Fermented Soybeans)',
+        description: 'Traditional Japanese breakfast with unique texture',
+        cultural_context: 'Japanese traditional cuisine'
+      },
+      {
+        title: 'Durian Fruit',
+        description: 'Southeast Asian fruit with complex flavor profile',
+        cultural_context: 'Southeast Asian tropical cuisine'
+      },
+      {
+        title: 'Hákarl (Fermented Shark)',
+        description: 'Traditional Icelandic delicacy',
+        cultural_context: 'Nordic preservation traditions'
+      }
+    ],
+    fashion: [
+      {
+        title: 'Avant-Garde Asymmetrical Jacket',
+        description: 'Rei Kawakubo-inspired deconstructed silhouette',
+        cultural_context: 'Japanese conceptual fashion'
+      },
+      {
+        title: 'Traditional Hanbok with Modern Twist',
+        description: 'Korean traditional dress reimagined for contemporary wear',
+        cultural_context: 'Korean fashion fusion'
+      },
+      {
+        title: 'Sustainable Hemp Clothing',
+        description: 'Eco-conscious fashion with natural textures',
+        cultural_context: 'Sustainable fashion movement'
+      }
+    ]
+  };
+
+  const domainData = fallbackData[domain] || fallbackData.film;
+  
+  return domainData.map((item, index) => ({
+    domain,
+    title: item.title,
+    description: item.description,
+    difficulty: Math.max(1, Math.min(5, difficulty + index)),
+    image_url: getDefaultImage(domain),
+    reason: generateReason(domain, preferences),
+    cultural_context: item.cultural_context,
+    metadata: {
+      source: 'fallback',
+      generated_at: new Date().toISOString(),
+      index
+    }
+  }));
+}

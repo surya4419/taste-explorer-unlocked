@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 interface QlooRequest {
-  endpoint: 'insights' | 'tags' | 'affinity-cluster' | 'recipes/antitheses' | 'cross-domain-affinity';
+  endpoint: 'insights' | 'tags' | 'entities';
   method: 'GET' | 'POST';
   params?: Record<string, any>;
   body?: {
@@ -15,6 +15,7 @@ interface QlooRequest {
       type: 'urn:entity:artist' | 'urn:entity:book' | 'urn:entity:brand' | 'urn:entity:destination' | 'urn:entity:movie' | 'urn:entity:person' | 'urn:entity:place' | 'urn:entity:podcast' | 'urn:entity:tv_show' | 'urn:entity:video_game';
       ids?: string[];
       tags?: string[];
+      limit?: number;
     };
     signal?: {
       interests?: {
@@ -69,9 +70,9 @@ serve(async (req) => {
 
     console.log('Qloo API request:', { endpoint, method, params, body });
 
-    // Construct Qloo API URL
+    // Use the correct hackathon base URL
     const baseUrl = 'https://hackathon.api.qloo.com';
-    let qlooUrl = `${baseUrl}/${endpoint}`;
+    let qlooUrl = `${baseUrl}/v2/${endpoint}`;
 
     // Add query parameters for GET requests
     if (method === 'GET' && params) {
@@ -88,7 +89,7 @@ serve(async (req) => {
 
     console.log('Calling Qloo API:', qlooUrl);
 
-    // Make request to Qloo API
+    // Make request to Qloo API with correct headers
     const qlooResponse = await fetch(qlooUrl, {
       method,
       headers: {
@@ -101,12 +102,18 @@ serve(async (req) => {
     const qlooData = await qlooResponse.json();
 
     if (!qlooResponse.ok) {
-      console.error('Qloo API error:', qlooData);
+      console.error('Qloo API error:', {
+        status: qlooResponse.status,
+        statusText: qlooResponse.statusText,
+        data: qlooData,
+        url: qlooUrl
+      });
       return new Response(
         JSON.stringify({ 
           error: 'Qloo API error', 
           details: qlooData,
-          status: qlooResponse.status 
+          status: qlooResponse.status,
+          url: qlooUrl
         }),
         {
           status: qlooResponse.status,
@@ -115,7 +122,7 @@ serve(async (req) => {
       );
     }
 
-    console.log('Qloo API response received:', qlooData);
+    console.log('Qloo API response received successfully');
 
     return new Response(
       JSON.stringify(qlooData),

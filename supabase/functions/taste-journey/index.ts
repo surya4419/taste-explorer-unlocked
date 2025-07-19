@@ -87,79 +87,91 @@ async function startTasteJourney(supabase: any, userId: string, preferences: any
   console.log('Starting taste journey for user:', userId);
   
   try {
-    // 1. Get user's taste graph using Qloo's affinity-cluster
-    const affinityResponse = await supabase.functions.invoke('qloo-api', {
+    // 1. Try to get insights from Qloo API
+    const insightsResponse = await supabase.functions.invoke('qloo-api', {
       body: {
-        endpoint: 'affinity-cluster',
-        method: 'GET',
-        params: {
-          user_preferences: JSON.stringify(preferences),
-          domains: 'film,music,books,food,fashion'
+        endpoint: 'insights',
+        method: 'POST',
+        body: {
+          filter: {
+            type: 'urn:entity:movie',
+            limit: 5
+          },
+          signal: {
+            interests: {
+              tags: ['popular', 'trending']
+            }
+          }
         }
       }
     });
 
-    console.log('Qloo affinity response:', affinityResponse);
+    console.log('Qloo insights response:', insightsResponse);
 
     let tasteGraph = {};
-    if (affinityResponse.data) {
-      tasteGraph = affinityResponse.data;
+    if (insightsResponse.data && !insightsResponse.error) {
+      tasteGraph = {
+        insights: insightsResponse.data,
+        generated_at: new Date().toISOString()
+      };
     }
 
     // 2. Generate onboarding analysis with Gemini
     const geminiResponse = await supabase.functions.invoke('gemini-api', {
       body: {
-        prompt: `Analyze this user's taste preferences and create a comprehensive cultural profile. Identify comfort zones, potential growth areas, and recommend 3 discomfort challenges for immediate exploration.`,
+        prompt: `Analyze this user's taste preferences and create a comprehensive cultural profile. Identify comfort zones, potential growth areas, and recommend 3 discomfort challenges for immediate exploration.
+
+User preferences: ${JSON.stringify(preferences)}
+
+Please provide:
+1. A summary of their current taste profile
+2. Identified comfort zones
+3. Recommended growth areas
+4. 3 specific discomfort challenges they should try`,
         type: 'onboarding',
-        preferences: preferences,
-        context: `User preferences: ${JSON.stringify(preferences)}`
+        preferences: preferences
       }
     });
 
     console.log('Gemini onboarding analysis completed');
 
-    let onboardingReport = 'Welcome to your taste journey! We\'ll help you expand your cultural horizons.';
+    let onboardingReport = 'Welcome to your taste journey! Based on your preferences, we\'ve identified several exciting opportunities for cultural expansion. Your journey will be personalized to gradually introduce new experiences that challenge your current tastes while building on what you already enjoy.';
+    
     if (geminiResponse.data?.response) {
       onboardingReport = geminiResponse.data.response;
     }
 
-    // 3. Generate initial discomfort recommendations using Qloo's antitheses
-    const antithesesResponse = await supabase.functions.invoke('qloo-api', {
+    // 3. Generate initial discomfort recommendations
+    const recommendationsResponse = await supabase.functions.invoke('generate-recommendations', {
       body: {
-        endpoint: 'recipes/antitheses',
-        method: 'POST',
-        body: {
-          preferences: preferences,
-          domains: ['film', 'music', 'books', 'food', 'fashion'],
-          intensity: 0.7 // Medium discomfort level to start
-        }
+        userId: userId,
+        preferences: preferences,
+        domain: 'film', // Start with film recommendations
+        difficulty: 3
       }
     });
 
-    console.log('Qloo antitheses response:', antithesesResponse);
-
     let discomfortItems = [];
-    if (antithesesResponse.data?.recommendations) {
-      discomfortItems = antithesesResponse.data.recommendations;
+    if (recommendationsResponse.data?.recommendations) {
+      discomfortItems = recommendationsResponse.data.recommendations.slice(0, 3);
     }
 
-    // 4. Save taste graph data to Supabase for trend analysis
-    if (tasteGraph && Object.keys(tasteGraph).length > 0) {
-      const { error: saveError } = await supabase
-        .from('user_profiles')
-        .update({
-          taste_preferences: {
-            ...preferences,
-            taste_graph: tasteGraph,
-            onboarding_analysis: onboardingReport,
-            last_analyzed: new Date().toISOString()
-          }
-        })
-        .eq('user_id', userId);
+    // 4. Save taste graph data to Supabase
+    const { error: saveError } = await supabase
+      .from('user_profiles')
+      .update({
+        taste_preferences: {
+          ...preferences,
+          taste_graph: tasteGraph,
+          onboarding_analysis: onboardingReport,
+          last_analyzed: new Date().toISOString()
+        },
+        onboarding_completed: true
+      })
+      .eq('user_id', userId);
 
-      if (saveError) {
-        console.error('Error saving taste graph:', saveError);
-      }
+    if (saveError) {
+      console.error('Error saving taste graph:', saveError);
     }
 
     return new Response(
@@ -191,49 +203,81 @@ async function generateProgressivePath(supabase: any, userId: string, domain: st
   console.log('Generating progressive path:', { domain, currentTaste, targetTaste });
 
   try {
-    // Use Qloo's cross-domain affinity to build bridge content
-    const bridgeResponse = await supabase.functions.invoke('qloo-api', {
+    // Create a progressive path using AI
+    const pathResponse = await supabase.functions.invoke('gemini-api', {
       body: {
-        endpoint: 'cross-domain-affinity',
-        method: 'GET',
-        params: {
-          from: currentTaste,
-          to: targetTaste,
-          domain: domain,
-          steps: 4 // Create a 4-step progression
-        }
+        prompt: `Create a 4-step progressive learning path in ${domain} from "${currentTaste}" to "${targetTaste}".
+
+For each step, provide:
+- Title (specific recommendation)
+- Difficulty level (1-5)
+- Description (why this step is important)
+- Cultural context (background information)
+
+Make each step a logical bridge that builds on the previous one. The progression should feel natural and achievable.
+
+Format as a JSON array with objects containing: title, difficulty, description, culturalContext`,
+        type: 'curriculum',
+        domain: domain
       }
     });
 
-    console.log('Qloo bridge response:', bridgeResponse);
-
     let progressivePath = [];
-    if (bridgeResponse.data?.path) {
-      progressivePath = bridgeResponse.data.path;
-    } else {
-      // Fallback: create a mock progressive path
-      progressivePath = [
-        { title: currentTaste, difficulty: 1, description: 'Your comfort zone' },
-        { title: 'Bridge Content 1', difficulty: 2, description: 'Gentle introduction to new elements' },
-        { title: 'Bridge Content 2', difficulty: 3, description: 'Moderate challenge with familiar elements' },
-        { title: targetTaste, difficulty: 4, description: 'Your growth target' }
-      ];
+    
+    if (pathResponse.data?.response) {
+      try {
+        // Try to parse JSON from the response
+        const jsonMatch = pathResponse.data.response.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          progressivePath = JSON.parse(jsonMatch[0]);
+        }
+      } catch (parseError) {
+        console.log('Could not parse JSON from Gemini response, creating fallback path');
+      }
     }
 
-    // Enhance each step with Gemini-generated descriptions
-    for (let i = 0; i < progressivePath.length; i++) {
-      const step = progressivePath[i];
-      
-      const descriptionResponse = await supabase.functions.invoke('gemini-api', {
-        body: {
-          prompt: `Create a compelling description and cultural context for "${step.title}" as step ${i + 1} of 4 in a ${domain} journey from "${currentTaste}" to "${targetTaste}". Explain why this step is important for cultural growth.`,
-          type: 'explanation',
-          domain: domain
-        }
-      });
+    // Fallback: create a structured progressive path
+    if (progressivePath.length === 0) {
+      const pathTemplates: Record<string, any[]> = {
+        film: [
+          { title: currentTaste, difficulty: 1, description: 'Your comfort zone - familiar and enjoyable' },
+          { title: 'Critically Acclaimed Blockbusters', difficulty: 2, description: 'Popular films with deeper themes' },
+          { title: 'International Cinema', difficulty: 3, description: 'Foreign films with subtitles' },
+          { title: targetTaste, difficulty: 4, description: 'Your growth target - challenging but rewarding' }
+        ],
+        music: [
+          { title: currentTaste, difficulty: 1, description: 'Your current musical preferences' },
+          { title: 'Genre Fusion', difficulty: 2, description: 'Blends of familiar and new styles' },
+          { title: 'Instrumental Exploration', difficulty: 3, description: 'Focus on composition over vocals' },
+          { title: targetTaste, difficulty: 4, description: 'Advanced musical complexity' }
+        ],
+        books: [
+          { title: currentTaste, difficulty: 1, description: 'Your preferred reading style' },
+          { title: 'Literary Fiction', difficulty: 2, description: 'Character-driven narratives' },
+          { title: 'Experimental Narratives', difficulty: 3, description: 'Unconventional storytelling' },
+          { title: targetTaste, difficulty: 4, description: 'Complex literary works' }
+        ],
+        food: [
+          { title: currentTaste, difficulty: 1, description: 'Your culinary comfort zone' },
+          { title: 'Fusion Cuisine', difficulty: 2, description: 'Familiar flavors with new techniques' },
+          { title: 'Regional Specialties', difficulty: 3, description: 'Authentic cultural dishes' },
+          { title: targetTaste, difficulty: 4, description: 'Challenging flavor profiles' }
+        ],
+        fashion: [
+          { title: currentTaste, difficulty: 1, description: 'Your current style preferences' },
+          { title: 'Contemporary Trends', difficulty: 2, description: 'Modern interpretations of classic styles' },
+          { title: 'Cultural Fashion', difficulty: 3, description: 'Traditional garments from other cultures' },
+          { title: targetTaste, difficulty: 4, description: 'Avant-garde and experimental fashion' }
+        ]
+      };
 
-      if (descriptionResponse.data?.response) {
-        progressivePath[i].culturalContext = descriptionResponse.data.response;
+      progressivePath = pathTemplates[domain] || pathTemplates.film;
+    }
+
+    // Enhance each step with cultural context if not already present
+    for (let i = 0; i < progressivePath.length; i++) {
+      if (!progressivePath[i].culturalContext) {
+        progressivePath[i].culturalContext = `Step ${i + 1} in your ${domain} journey: Building cultural awareness through gradual exposure to new experiences.`;
       }
     }
 
@@ -265,71 +309,68 @@ async function createFiveDayPlan(supabase: any, userId: string, preferences: any
   console.log('Creating 5-day taste plan for user:', userId);
 
   try {
-    // Get cross-domain affinity data from Qloo
-    const crossDomainResponse = await supabase.functions.invoke('qloo-api', {
-      body: {
-        endpoint: 'cross-domain-affinity',
-        method: 'GET',
-        params: {
-          preferences: JSON.stringify(preferences),
-          target_domain: domain || 'all',
-          timeframe: '5_days'
-        }
-      }
-    });
-
-    let crossDomainData = {};
-    if (crossDomainResponse.data) {
-      crossDomainData = crossDomainResponse.data;
-    }
-
     // Generate 5-day plan using Gemini
     const planResponse = await supabase.functions.invoke('gemini-api', {
       body: {
-        prompt: `Create a structured 5-day cultural expansion plan. Each day should include:
-        - One primary challenge in ${domain || 'any domain'}
-        - Learning objective for the day
-        - Reflection prompt
-        - Connection to previous day's experience
-        - Estimated time commitment
-        
-        Make it engaging, progressive, and achievable. Focus on building cultural confidence through manageable discomfort.`,
+        prompt: `Create a structured 5-day cultural expansion plan focusing on ${domain || 'multiple domains'}.
+
+Each day should include:
+- Day number and theme
+- One primary challenge/activity
+- Learning objective
+- Time commitment (realistic)
+- Reflection prompt
+- Connection to overall growth
+
+Make it engaging, progressive, and achievable. Focus on building cultural confidence through manageable discomfort.
+
+User preferences: ${JSON.stringify(preferences)}`,
         type: 'curriculum',
         domain: domain,
-        preferences: preferences,
-        context: `Cross-domain affinity data: ${JSON.stringify(crossDomainData)}`
+        preferences: preferences
       }
     });
 
     let fiveDayPlan = {
-      title: '5-Day Cultural Expansion Journey',
+      title: `5-Day ${domain || 'Multi-Domain'} Cultural Expansion Journey`,
       domain: domain || 'Multi-domain',
+      description: 'A carefully crafted journey to expand your cultural horizons',
       days: []
     };
 
     if (planResponse.data?.response) {
-      // Parse the Gemini response to extract structured plan
       fiveDayPlan.description = planResponse.data.response;
-      
-      // Create structured daily entries (simplified for demo)
-      const domains = ['film', 'music', 'books', 'food', 'fashion'];
-      for (let i = 1; i <= 5; i++) {
-        fiveDayPlan.days.push({
-          day: i,
-          domain: domain || domains[(i - 1) % domains.length],
-          title: `Day ${i}: Expand Your ${domain || domains[(i - 1) % domains.length]} Horizons`,
-          challenge: `Challenge for day ${i}`,
-          timeCommitment: '30-60 minutes',
-          reflectionPrompt: `How did today's experience change your perspective?`
-        });
-      }
+    }
+
+    // Create structured daily entries
+    const domains = ['film', 'music', 'books', 'food', 'fashion'];
+    const themes = [
+      'Foundation Building',
+      'Comfort Zone Expansion', 
+      'Cultural Bridge',
+      'Deep Dive',
+      'Integration & Reflection'
+    ];
+
+    for (let i = 1; i <= 5; i++) {
+      const dayDomain = domain || domains[(i - 1) % domains.length];
+      fiveDayPlan.days.push({
+        day: i,
+        theme: themes[i - 1],
+        domain: dayDomain,
+        title: `Day ${i}: ${themes[i - 1]} in ${dayDomain.charAt(0).toUpperCase() + dayDomain.slice(1)}`,
+        challenge: `Explore a ${dayDomain} recommendation that challenges your current preferences`,
+        timeCommitment: '30-60 minutes',
+        learningObjective: `Build comfort with unfamiliar ${dayDomain} experiences`,
+        reflectionPrompt: `How did today's ${dayDomain} experience change your perspective? What surprised you?`,
+        connectionToGrowth: `This step builds your cultural confidence and openness to new experiences`
+      });
     }
 
     return new Response(
       JSON.stringify({
         success: true,
-        fiveDayPlan,
-        crossDomainConnections: crossDomainData
+        fiveDayPlan
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
