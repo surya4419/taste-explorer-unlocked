@@ -1,5 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4';
+import { createClient } from 'npm:@supabase/supabase-js@2.38.4';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,12 +12,43 @@ interface RecommendationRequest {
   difficulty?: number;
 }
 
+// Helper function to sanitize metadata for JSON serialization
+function sanitizeMetadata(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+  
+  if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
+    return obj;
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeMetadata(item));
+  }
+  
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      try {
+        sanitized[key] = sanitizeMetadata(value);
+      } catch (error) {
+        // Skip non-serializable properties
+        console.warn(`Skipping non-serializable property: ${key}`);
+      }
+    }
+    return sanitized;
+  }
+  
+  // Skip functions, symbols, and other non-serializable types
+  return null;
+}
+
 // Helper function to get valid tags from Qloo
 async function getValidTags(supabaseClient: any, domain: string) {
   try {
     const { data, error } = await supabaseClient.functions.invoke('qloo-api', {
       body: {
-        endpoint: 'tags',
+        endpoint: 'v2/tags',
         method: 'GET',
         params: {
           limit: 10
@@ -28,13 +58,12 @@ async function getValidTags(supabaseClient: any, domain: string) {
 
     if (error || !data?.data) {
       console.log('Using fallback tags for domain:', domain);
-      // Return empty array if no valid tags can be retrieved
       return [];
     }
 
     // Only return tags that have valid IDs
     return data.data
-      .filter((tag: any) => tag.id)
+      .filter((tag: any) => tag.id && typeof tag.id === 'string')
       .map((tag: any) => tag.id)
       .slice(0, 5);
   } catch (error) {
@@ -43,7 +72,7 @@ async function getValidTags(supabaseClient: any, domain: string) {
   }
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -52,6 +81,16 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     console.log('Auth header present:', !!authHeader);
 
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'Missing Authorization header' }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
     // Initialize Supabase client
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -59,7 +98,7 @@ serve(async (req) => {
       {
         auth: { persistSession: false },
         global: {
-          headers: { Authorization: authHeader! },
+          headers: { Authorization: authHeader },
         },
       }
     );
@@ -92,7 +131,8 @@ serve(async (req) => {
       );
     }
 
-    const { preferences, domain, difficulty = 3 } = await req.json() as RecommendationRequest;
+    const requestBody = await req.json();
+    const { preferences, domain, difficulty = 3 } = requestBody as RecommendationRequest;
 
     console.log('Generating recommendations for:', { domain, difficulty, preferences });
 
@@ -111,56 +151,59 @@ serve(async (req) => {
     const validTags = await getValidTags(supabaseClient, domain);
     console.log('Using tags:', validTags);
 
-    // Call Qloo API to get insights with correct parameters
-    const qlooResponse = await supabaseClient.functions.invoke('qloo-api', {
-      body: {
-        endpoint: 'insights',
-        method: 'POST',
-        body: {
-          filter: {
-            type: entityType,
-            limit: 10
-          },
-          signal: {
-            interests: {
-              tags: validTags
-            }
-          }
-        }
-      }
-    });
-
     let recommendations = [];
 
-    if (qlooResponse.error) {
-      console.error('Qloo API error:', qlooResponse.error);
-      // Create enhanced fallback recommendations
-      recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
-    } else {
-      // Transform Qloo API response into our recommendation format
-      const qlooData = qlooResponse.data;
-      console.log('Qloo API response structure:', Object.keys(qlooData || {}));
-      
-      if (qlooData?.data && Array.isArray(qlooData.data)) {
-        recommendations = qlooData.data.slice(0, 5).map((item: any, index: number) => ({
-          domain: domain === 'all' ? 'film' : domain,
-          title: item.name || item.title || `${domain} Recommendation ${index + 1}`,
-          description: item.description || `A curated ${domain} recommendation from our cultural database`,
-          difficulty: Math.max(1, Math.min(5, difficulty + Math.floor(Math.random() * 3) - 1)),
-          image_url: item.image_url || getDefaultImage(domain),
-          reason: generateReason(domain, preferences),
-          cultural_context: item.cultural_context || `Contemporary ${domain} exploration`,
-          metadata: {
-            qloo_id: item.id,
-            generated_at: new Date().toISOString(),
-            source: 'qloo_api',
-            ...item
+    // Try to get recommendations from Qloo API
+    if (validTags.length > 0) {
+      try {
+        const qlooResponse = await supabaseClient.functions.invoke('qloo-api', {
+          body: {
+            endpoint: 'v2/insights',
+            method: 'POST',
+            body: {
+              filter: {
+                type: entityType,
+                limit: 10
+              },
+              signal: {
+                interests: {
+                  tags: validTags
+                }
+              }
+            }
           }
-        }));
-      } else {
-        console.log('Unexpected Qloo response structure, using fallback');
+        });
+
+        if (!qlooResponse.error && qlooResponse.data?.data && Array.isArray(qlooResponse.data.data)) {
+          recommendations = qlooResponse.data.data.slice(0, 5).map((item: any, index: number) => ({
+            domain: domain === 'all' ? 'film' : domain,
+            title: item.name || item.title || `${domain} Recommendation ${index + 1}`,
+            description: item.description || `A curated ${domain} recommendation from our cultural database`,
+            difficulty: Math.max(1, Math.min(5, difficulty + Math.floor(Math.random() * 3) - 1)),
+            image_url: item.image_url || getDefaultImage(domain),
+            reason: generateReason(domain, preferences),
+            cultural_context: item.cultural_context || `Contemporary ${domain} exploration`,
+            metadata: sanitizeMetadata({
+              qloo_id: item.id,
+              generated_at: new Date().toISOString(),
+              source: 'qloo_api',
+              name: item.name,
+              description: item.description,
+              image_url: item.image_url
+            })
+          }));
+          console.log('Successfully generated recommendations from Qloo API');
+        } else {
+          console.log('Qloo API returned unexpected format, using fallback');
+          recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
+        }
+      } catch (error) {
+        console.error('Error calling Qloo API:', error);
         recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
       }
+    } else {
+      console.log('No valid tags found, using fallback recommendations');
+      recommendations = await createFallbackRecommendations(domain, difficulty, preferences);
     }
 
     // Ensure we have at least some recommendations
@@ -174,49 +217,60 @@ serve(async (req) => {
       difficulty: Math.max(1, Math.min(5, rec.difficulty + (difficulty - 3)))
     }));
 
-    // Store recommendations in database
-    const { data: savedRecommendations, error: saveError } = await supabaseClient
-      .from('content_recommendations')
-      .upsert(
-        adjustedRecommendations.map(rec => ({
-          user_id: user.id,
-          external_id: rec.metadata?.qloo_id || `fallback_${rec.domain}_${Date.now()}_${Math.random()}`,
-          domain: rec.domain,
-          title: rec.title,
-          description: rec.description,
-          difficulty: rec.difficulty,
-          image_url: rec.image_url,
-          reason: rec.reason,
-          cultural_context: rec.cultural_context,
-          metadata: rec.metadata
-        })),
-        { onConflict: 'user_id,external_id' }
-      )
-      .select();
+    // Store recommendations in database with proper error handling
+    try {
+      const { data: savedRecommendations, error: saveError } = await supabaseClient
+        .from('content_recommendations')
+        .upsert(
+          adjustedRecommendations.map(rec => ({
+            user_id: user.id,
+            external_id: rec.metadata?.qloo_id || `fallback_${rec.domain}_${Date.now()}_${Math.random()}`,
+            domain: rec.domain,
+            title: rec.title,
+            description: rec.description,
+            difficulty: rec.difficulty,
+            image_url: rec.image_url,
+            reason: rec.reason,
+            cultural_context: rec.cultural_context,
+            metadata: rec.metadata
+          })),
+          { onConflict: 'user_id,external_id' }
+        )
+        .select();
 
-    if (saveError) {
-      console.error('Error saving recommendations:', saveError);
+      if (saveError) {
+        console.error('Error saving recommendations:', saveError);
+        return new Response(
+          JSON.stringify({ error: 'Failed to save recommendations', details: saveError.message }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      console.log(`Successfully generated and saved ${savedRecommendations?.length || 0} recommendations`);
+
       return new Response(
-        JSON.stringify({ error: 'Failed to save recommendations', details: saveError.message }),
+        JSON.stringify({ 
+          recommendations: savedRecommendations,
+          message: 'Recommendations generated successfully',
+          source: validTags.length > 0 ? 'qloo_api' : 'fallback'
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    } catch (dbError) {
+      console.error('Database error:', dbError);
+      return new Response(
+        JSON.stringify({ error: 'Database error', details: dbError.message }),
         {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         }
       );
     }
-
-    console.log(`Successfully generated and saved ${savedRecommendations?.length || 0} recommendations`);
-
-    return new Response(
-      JSON.stringify({ 
-        recommendations: savedRecommendations,
-        message: 'Recommendations generated successfully',
-        source: qlooResponse.error ? 'fallback' : 'qloo_api'
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
 
   } catch (error) {
     console.error('Error in generate-recommendations:', error);
@@ -352,10 +406,10 @@ async function createFallbackRecommendations(domain: string, difficulty: number,
     image_url: getDefaultImage(domain),
     reason: generateReason(domain, preferences),
     cultural_context: item.cultural_context,
-    metadata: {
+    metadata: sanitizeMetadata({
       source: 'fallback',
       generated_at: new Date().toISOString(),
       index
-    }
+    })
   }));
 }
